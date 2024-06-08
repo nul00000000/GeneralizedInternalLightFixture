@@ -182,9 +182,19 @@ void handleCommand() {
 			needsUpdate = true;
 		}
 	} else if(mode == 2) {
-		if(client->available() >= 2) {
-			speed = ((float) client->read() * 360.0f / 256.0f - 180.0f) / 100.0f;
-			ledOffset = ((float) client->read() * 360.0f / 256.0f - 180.0f) / 4.0f;
+		if(client->available() >= 8) {
+			uint8_t buf[4];
+			for(int i = 0; i < 4; i++) {
+				buf[3 - i] = client->read();
+			}
+			float received = * (float*)buf;
+			speed = received;
+			
+			uint8_t buf2[4];
+			for(int i = 0; i < 4; i++) {
+				buf2[3 - i] = client->read();
+			}
+			ledOffset = * (float*)buf2;
 			needsUpdate = false;
 			Serial.println("Rainbow Set: " + (String) speed + " " + (String) ledOffset);
 		} else {
