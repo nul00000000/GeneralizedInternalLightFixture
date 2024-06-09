@@ -9,7 +9,7 @@
 
 #define LED_PIN 12
 #define NUM_LEDS 298
-#define NUM_NETS 3
+#define NUM_NETS 2
 
 #define MAX_COLOR_CYCLE 25
 
@@ -56,11 +56,17 @@ float timeForUnit = 0;
 uint8_t cycleLength = 0;
 uint8_t currentIndex = 0;
 
+uint8_t ledsPerBit = 1;
+int millisPerCount = 1000;
+int startCount = 0;
+uint64_t millisAtStart = 0;
+int color = 0;
+
 int handshake() {
 	Serial.println("Handshaking");
 	client = new WiFiClient();
-	// if(client->connect("monke.gay", 8585)) {
-	if(client->connect("192.168.1.199", 8585)) {
+	if(client->connect("monke.gay", 8585)) {
+	// if(client->connect("192.168.1.199", 8585)) {
 		client->println(stripName);
 		client->flush();
 
@@ -173,6 +179,14 @@ float parseFloat(WiFiClient* client) {
 	return * (float*)buf;
 }
 
+int parseInt32(WiFiClient* client) {
+	uint8_t buf[4];
+	for(int i = 0; i < 4; i++) {
+		buf[3 - i] = client->read();
+	}
+	return * (int*)buf;
+}
+
 void handleCommand() {
 	if(mode == 0) {
 		Serial.println("Off Set");
@@ -214,12 +228,12 @@ void handleCommand() {
 			}
 			Serial.println("Sequence: " + (String) speed + " " + (String) ledOffset + " " + (String) cycleLength);
 			for(int i = 0; i < NUM_LEDS; i++) {
-					float r = 0;
-					float g = 0;
-					float b = 0;
-					HSVtoRGB(hues[0], sats[0], sats[0], r, g, b);
-					leds[i] = CRGB(r, g, b);
-				}
+				float r = 0;
+				float g = 0;
+				float b = 0;
+				HSVtoRGB(hues[0], sats[0], sats[0], r, g, b);
+				leds[i] = CRGB(r, g, b);
+			}
 			needsUpdate = false;
 		} else {
 			needsUpdate = true;
@@ -230,6 +244,18 @@ void handleCommand() {
 			for(int i = 0; i < NUM_LEDS; i++) {
 				leds[i] = CRGB((uint8_t) client->read(), (uint8_t) client->read(), (uint8_t) client->read());
 			}
+			needsUpdate = false;
+		} else {
+			needsUpdate = true;
+		}
+	} else if(mode == 5) {
+		if(client->available() >= 13) {
+			ledsPerBit = (uint8_t) client->read();
+			millisPerCount = parseInt32(client); //negative if no counting
+			startCount = parseInt32(client);
+			color = parseInt32(client);
+			millisAtStart = millis();
+			Serial.printf("Binary Counter: %u, %d, %d, %x\n", ledsPerBit, millisPerCount, startCount, color);
 			needsUpdate = false;
 		} else {
 			needsUpdate = true;
@@ -319,6 +345,14 @@ void loop() {
 			float b = 0;
 			HSVtoRGB(getHueInCycle(time + ledOffset * i), getSatInCycle(time + ledOffset * i), getBriInCycle(time + ledOffset * i), r, g, b);
 			leds[i] = CRGB((uint8_t) r, (uint8_t) g, (uint8_t) b);
+		}
+		FastLED.show();
+	} else if(mode == 5 && !needsUpdate) {//binary counter
+		uint64_t num = millisPerCount > 0 ? (millis() - millisAtStart) / (uint64_t) millisPerCount + startCount : startCount;
+		for(int i = 0; i < NUM_LEDS; i++) {
+			int bitToCheck = i / ledsPerBit;
+			bool on = (1 << bitToCheck) & num;
+			leds[i] = on ? CRGB(color) : CRGB(0);
 		}
 		FastLED.show();
 	}
