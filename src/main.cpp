@@ -8,15 +8,17 @@
 #include <FastLED.h>
 
 #define LED_PIN 12
-#define NUM_LEDS 7
+#define NUM_LEDS 298
 #define NUM_NETS 3
 
 #define MAX_COLOR_CYCLE 25
 
 const char* ssid[NUM_NETS] = {
+	"certified hood classic",
 	"espconn"
 };
 const char* password[NUM_NETS] = {
+	"886-crimson-921",
 	"espcode69"
 };
 
@@ -57,8 +59,8 @@ uint8_t currentIndex = 0;
 int handshake() {
 	Serial.println("Handshaking");
 	client = new WiFiClient();
-	if(client->connect("monke.gay", 8585)) {
-	// if(client->connect("192.168.137.1", 8585)) {
+	// if(client->connect("monke.gay", 8585)) {
+	if(client->connect("192.168.1.199", 8585)) {
 		client->println(stripName);
 		client->flush();
 
@@ -163,6 +165,14 @@ template <typename T> int sgn(T val) {
     return (T(0) < val) - (val < T(0));
 }
 
+float parseFloat(WiFiClient* client) {
+	uint8_t buf[4];
+	for(int i = 0; i < 4; i++) {
+		buf[3 - i] = client->read();
+	}
+	return * (float*)buf;
+}
+
 void handleCommand() {
 	if(mode == 0) {
 		Serial.println("Off Set");
@@ -183,34 +193,26 @@ void handleCommand() {
 		}
 	} else if(mode == 2) {
 		if(client->available() >= 8) {
-			uint8_t buf[4];
-			for(int i = 0; i < 4; i++) {
-				buf[3 - i] = client->read();
-			}
-			float received = * (float*)buf;
-			speed = received;
-			
-			uint8_t buf2[4];
-			for(int i = 0; i < 4; i++) {
-				buf2[3 - i] = client->read();
-			}
-			ledOffset = * (float*)buf2;
+			speed = parseFloat(client);
+			ledOffset = parseFloat(client);
 			needsUpdate = false;
 			Serial.println("Rainbow Set: " + (String) speed + " " + (String) ledOffset);
 		} else {
 			needsUpdate = true;
 		}
 	} else if(mode == 3) {
-		if(client->available() >= MAX_COLOR_CYCLE * 3 + 3) {
-			timeForUnit = ((float) client->read() * 60.0f / 256.0f);
-			ledOffset = ((float) client->read() * 360.0f / 256.0f - 180.0f) / 100.0f;
+		if(client->available() >= MAX_COLOR_CYCLE * 3 + 9) {
+			// timeForUnit = ((float) client->read() * 60.0f / 256.0f);
+			// ledOffset = ((float) client->read() * 360.0f / 256.0f - 180.0f) / 100.0f;
+			timeForUnit = parseFloat(client);
+			ledOffset = parseFloat(client);
 			cycleLength = (uint8_t) client->read();
 			for(int i = 0; i < MAX_COLOR_CYCLE; i++) {
 				hues[i] = (float) client->read() * 360.0f / 255.0f;
 				sats[i] = (float) client->read() * 100.0f / 255.0f;
 				bris[i] = (float) client->read() * 100.0f / 255.0f;
 			}
-			Serial.println("Rainbow Set: " + (String) speed + " " + (String) ledOffset + " " + (String) cycleLength);
+			Serial.println("Sequence: " + (String) speed + " " + (String) ledOffset + " " + (String) cycleLength);
 			for(int i = 0; i < NUM_LEDS; i++) {
 					float r = 0;
 					float g = 0;
