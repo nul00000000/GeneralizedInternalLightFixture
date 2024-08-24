@@ -2,25 +2,24 @@
 #define FASTLED_ESP32_SPI_BUS HSPI
 
 #include <Arduino.h>
+
 #include <Wifi.h>
+#include <ESPAsyncWebServer.h>
+#include <DNSServer.h>
 #include <HTTPClient.h>
+
 #include <SPI.h>
 #include <FastLED.h>
 
+#include <Preferences.h>
+
 #define LED_PIN 12
 #define NUM_LEDS 298
-#define NUM_NETS 2
 
 #define MAX_COLOR_CYCLE 25
 
-const char* ssid[NUM_NETS] = {
-	"certified hood classic",
-	"espconn"
-};
-const char* password[NUM_NETS] = {
-	"886-crimson-921",
-	"espcode69"
-};
+#define AP_SSID "GILF-Setup"
+#define AP_PASS "12345678"
 
 String html;
 
@@ -62,6 +61,134 @@ int startCount = 0;
 uint64_t millisAtStart = 0;
 int color = 0;
 
+AsyncWebServer server(80);
+DNSServer dnsServer;
+
+Preferences prefs;
+
+String SSID;
+String PASS;
+
+bool readyToConnect = true;
+bool initComplete = false;
+
+const char* ROOT_HTML = 
+		"<html>"
+		"	<head><title>GILF Setup</title></head>"
+		"	<body>"
+		"		<h1>GILF Setup</h1>"
+		"		<form action='/conn/' method='post' enctype='application/x-www-form-urlencoded'>"
+		"			<input type='text' placeholder='Wifi SSID' name='ssid'>" 
+		"			<input type='text' placeholder='Wifi Password' name='pass'><br>"
+		"			<input type='submit' value='Submit'>"
+		"		</form>"
+		"	</body>"
+		"</html>";
+
+void handleRoot(AsyncWebServerRequest* request) {
+	request->send(200, "text/html", 
+		ROOT_HTML);
+}
+
+void handleConn(AsyncWebServerRequest* request) {
+	if(request->hasParam("ssid", true) && request->hasParam("pass", true)) {
+		prefs.begin("wifiInfo", false);
+		String ssid = request->getParam("ssid", true)->value();
+		String pass = request->getParam("pass", true)->value();
+		Serial.println("SSID Saved: " + ssid);
+		Serial.println("Password Saved: " + pass);
+		prefs.putString("ssid", ssid);
+		prefs.putString("pass", pass);
+		prefs.begin("wifiInfo");
+		request->send(200, "text/html", 
+			"<html>"
+			"	<head><title>GILF Setup</title></head>"
+			"	<body>"
+			"		<h1>GILF Device successfully connected to WiFi!</h1>"
+			"	</body>"
+			"</html>");
+		
+		readyToConnect = true;
+	} else {
+		request->send(400, "text/html", 
+			"<html>"
+			"	<head><title>GILF Setup</title></head>"
+			"	<body>"
+			"		<h1>Error in request parameters</h1>"
+			"	</body>"
+			"</html>");
+	}
+}
+
+bool attemptWiFi() {
+	WiFi.disconnect();
+	prefs.begin("wifiInfo", true);
+	if(prefs.isKey("ssid") && prefs.isKey("pass")) {
+		bool connected = false;
+		Serial.print("Connecting to ");
+		String ssid = prefs.getString("ssid");
+		String pass = prefs.getString("pass");
+		prefs.end();
+		Serial.print(ssid);
+		WiFi.begin(ssid.c_str(), pass.c_str());
+		for(int j = 0; j < 10; j++) {
+			if(WiFi.status() != WL_CONNECTED) {
+				delay(500);
+				Serial.print(".");
+			} else {
+				connected = true;
+			}
+		}
+		Serial.println();
+		if(!connected) {
+			Serial.println("Could not connect to network, opening AP...");
+			return false;
+		}
+		// Print local IP address and start web server
+		Serial.println();
+		Serial.println("WiFi connected.");
+		Serial.print("IP address: ");
+		Serial.println(WiFi.localIP());
+
+		return true;
+	} else {
+		prefs.end();
+		Serial.println("No SSID or password saved, opening AP...");
+		return false;
+	}
+}
+
+void setupSetupAP() {
+	WiFi.disconnect();
+	WiFi.softAP(AP_SSID, AP_PASS);
+	IPAddress ip = WiFi.softAPIP();
+	Serial.print("AP IP Address: ");
+	Serial.println(ip);
+
+	server.on("/", HTTP_GET, handleRoot);
+	server.on("/connecttest.txt", HTTP_GET, handleRoot);
+	server.on("/conn/", HTTP_POST, handleConn);
+
+	server.onNotFound([](AsyncWebServerRequest *request) {
+		Serial.println("NOT FOUND: " + request->host() + " " + request->url());
+		if (request->method() == HTTP_OPTIONS) {
+			request->send(200);
+		} else {
+			request->send(200, "text/html", ROOT_HTML);
+		}
+	});
+
+	DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+
+	dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+	dnsServer.setTTL(300);
+	dnsServer.start(53, "*", WiFi.softAPIP());
+
+	server.begin();
+
+	Serial.println("AP Started");
+}
+
 int handshake() {
 	Serial.println("Handshaking");
 	client = new WiFiClient();
@@ -91,44 +218,33 @@ void setup() {
 
 	FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
 
-	// // Connect to Wi-Fi network with SSID and password
-	bool connected = false;
-	for(int i = 0; i < NUM_NETS && !connected; i++) {
-		Serial.print("Connecting to ");
-		Serial.print(ssid[i]);
-		WiFi.begin(ssid[i], password[i]);
-		for(int j = 0; j < 10; j++) {
-			if(WiFi.status() != WL_CONNECTED) {
-				delay(500);
-				Serial.print(".");
-			} else {
-				connected = true;
-			}
-		}
+	// // // Connect to Wi-Fi network with SSID and password
+	// bool connected = false;
+	// for(int i = 0; i < NUM_NETS && !connected; i++) {
+	// 	Serial.print("Connecting to ");
+	// 	Serial.print(ssid[i]);
+	// 	WiFi.begin(ssid[i], password[i]);
+	// 	for(int j = 0; j < 10; j++) {
+	// 		if(WiFi.status() != WL_CONNECTED) {
+	// 			delay(500);
+	// 			Serial.print(".");
+	// 		} else {
+	// 			connected = true;
+	// 		}
+	// 	}
 
-	}
-	if(!connected) {
-		Serial.println("Could not connect to network");
-	}
-	// Print local IP address and start web server
-	Serial.println("");
-	Serial.println("WiFi connected.");
-	Serial.print("IP address: ");
-	Serial.println(WiFi.localIP());
-
-	stripName = (String)"esp" + micros();
-
-	while(!handshake()) {
-		delayMicroseconds(1000000);
-	}
-
-	Serial.println(stripName);
-	Serial.println(dly);
+	// }
+	// if(!connected) {
+	// 	Serial.println("Could not connect to network");
+	// }
+	// // Print local IP address and start web server
+	// Serial.println("");
+	// Serial.println("WiFi connected.");
+	// Serial.print("IP address: ");
+	// Serial.println(WiFi.localIP());
 
 	FastLED.setBrightness(70);
 }
-
-int lastA = 0;
 
 void HSVtoRGB(float h, float S, float V, float& R, float& G, float& B) {
     if(S>100 || S<0 || V>100 || V<0){
@@ -297,64 +413,86 @@ float getBriInCycle(double time) {
 }
 
 void loop() {
-	if(client->connected()) {
-		if(millis() > lastSendTime + 1000) {
-			lastSendTime = millis();
-			client->println("alive");
+	if(readyToConnect) {
+		readyToConnect = false;
+		bool success = attemptWiFi();
+		if(!success) {
+			setupSetupAP();
+		} else {
+			Serial.println("Successfully connected to WiFi");
+			stripName = (String)"esp" + micros();
+
+			while(!handshake()) {
+				delayMicroseconds(1000000);
+			}
+
+			Serial.println(stripName);
+			Serial.println(dly);
+			initComplete = true;
 		}
-		int a = client->available();
-		if(needsUpdate) {
-			handleCommand();
-		} else if(a >= 1) {
-			uint8_t m = client->read();
-			mode = m;
-			handleCommand();
-			FastLED.show();
-			if(dly == 0) {
-				dly = 1;
+	}
+
+	if(initComplete) {
+		if(client->connected()) {
+			if(millis() > lastSendTime + 1000) {
+				lastSendTime = millis();
+				client->println("alive");
+			}
+			int a = client->available();
+			if(needsUpdate) {
+				handleCommand();
+			} else if(a >= 1) {
+				uint8_t m = client->read();
+				mode = m;
+				handleCommand();
+				FastLED.show();
+				if(dly == 0) {
+					dly = 1;
+				}
+			}
+		} else {
+			if(millis() > lastSendTime + 1000) {
+				lastSendTime = millis();
+				handshake();
 			}
 		}
-		lastA = a;
+		if(mode == 2 && !needsUpdate) {
+			for(int i = 0; i < NUM_LEDS; i++) {
+				float r = 0;
+				float g = 0;
+				float b = 0;
+				HSVtoRGB(hue + ledOffset * i, 100.0f, 100.0f, r, g, b);
+				leds[i] = CRGB((uint8_t) r, (uint8_t) g, (uint8_t) b);
+			}
+			hue += speed;
+			if(hue > 360.0f) {
+				hue -= 360.0f;
+			} else if(hue < 0.0f) {
+				hue += 360.0f;
+			}
+			FastLED.show();
+		} else if(mode == 3 && !needsUpdate) {
+			double time = micros() / 1000000.0;
+			// double v = (sin((time - lastStart) / (PI * 2) * timeForUnit) + 1.0) / 2.0;
+			for(int i = 0; i < NUM_LEDS; i++) {
+				float r = 0;
+				float g = 0;
+				float b = 0;
+				HSVtoRGB(getHueInCycle(time + ledOffset * i), getSatInCycle(time + ledOffset * i), getBriInCycle(time + ledOffset * i), r, g, b);
+				leds[i] = CRGB((uint8_t) r, (uint8_t) g, (uint8_t) b);
+			}
+			FastLED.show();
+		} else if(mode == 5 && !needsUpdate) {//binary counter
+			uint64_t num = millisPerCount > 0 ? (millis() - millisAtStart) / (uint64_t) millisPerCount + startCount : startCount;
+			for(int i = 0; i < NUM_LEDS; i++) {
+				int bitToCheck = i / ledsPerBit;
+				bool on = (1 << bitToCheck) & num;
+				leds[i] = on ? CRGB(color) : CRGB(0);
+			}
+			FastLED.show();
+		}
+		delayMicroseconds(dly);
 	} else {
-		if(millis() > lastSendTime + 1000) {
-			lastSendTime = millis();
-			handshake();
-		}
+		dnsServer.processNextRequest();
 	}
-	if(mode == 2 && !needsUpdate) {
-		for(int i = 0; i < NUM_LEDS; i++) {
-			float r = 0;
-			float g = 0;
-			float b = 0;
-			HSVtoRGB(hue + ledOffset * i, 100.0f, 100.0f, r, g, b);
-			leds[i] = CRGB((uint8_t) r, (uint8_t) g, (uint8_t) b);
-		}
-		hue += speed;
-		if(hue > 360.0f) {
-			hue -= 360.0f;
-		} else if(hue < 0.0f) {
-			hue += 360.0f;
-		}
-		FastLED.show();
-	} else if(mode == 3 && !needsUpdate) {
-		double time = micros() / 1000000.0;
-		// double v = (sin((time - lastStart) / (PI * 2) * timeForUnit) + 1.0) / 2.0;
-		for(int i = 0; i < NUM_LEDS; i++) {
-			float r = 0;
-			float g = 0;
-			float b = 0;
-			HSVtoRGB(getHueInCycle(time + ledOffset * i), getSatInCycle(time + ledOffset * i), getBriInCycle(time + ledOffset * i), r, g, b);
-			leds[i] = CRGB((uint8_t) r, (uint8_t) g, (uint8_t) b);
-		}
-		FastLED.show();
-	} else if(mode == 5 && !needsUpdate) {//binary counter
-		uint64_t num = millisPerCount > 0 ? (millis() - millisAtStart) / (uint64_t) millisPerCount + startCount : startCount;
-		for(int i = 0; i < NUM_LEDS; i++) {
-			int bitToCheck = i / ledsPerBit;
-			bool on = (1 << bitToCheck) & num;
-			leds[i] = on ? CRGB(color) : CRGB(0);
-		}
-		FastLED.show();
-	}
-	delayMicroseconds(dly);
 }
