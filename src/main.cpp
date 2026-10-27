@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 
-#include <Wifi.h>
+#include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
